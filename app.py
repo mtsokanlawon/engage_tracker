@@ -6,39 +6,33 @@ from typing import Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, File, Depends, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 
-from detection.video_processor import VideoProcessor
-from detection.audio_processor import AudioProcessor
-
 from services.engagement_service import save_engagement_metrics
-from services.db_stub import db_writer_stub # Replace with actual DB writer in production (db_sqlalchemy)
+from services.db_stub import db_writer_stub  # swap with real writer in production
 
 app = FastAPI(title="EngageTrack API (per-participant WS)")
 
-# Map participant_id -> VideoProcessor
-video_processors: Dict[str, VideoProcessor] = {}
+# Map participant_id -> VideoProcessor instance (lazy-created)
+video_processors: Dict[str, object] = {}
 # Map participant_id -> last active timestamp (epoch seconds)
 last_active: Dict[str, float] = {}
 # Lock to protect shared maps
 processors_lock = asyncio.Lock()
 
 # Idle timeout (seconds) after which a participant processor will be evicted
-PROCESSOR_IDLE_TIMEOUT = 60  # adjust as needed (60s default)
+PROCESSOR_IDLE_TIMEOUT = 60  # adjust as needed
 
 # Background cleanup task handle
 cleanup_task = None
 
-# Create a global audio processor if desired
-try:
-    audio_proc = AudioProcessor()
-except Exception as e:
-    audio_proc = None
-    print(f"Warning: Audio processor not initialized: {e}")
+# Lazy audio processor handle (don't instantiate at startup)
+audio_proc = None
 
 
 @app.on_event("startup")
 async def start_cleanup_task():
     global cleanup_task
     cleanup_task = asyncio.create_task(_cleanup_inactive_processors_loop())
+    app.logger = app.logger if hasattr(app, "logger") else None
     print("Cleanup task started.")
 
 
@@ -51,11 +45,12 @@ async def shutdown_cleanup_task():
             await cleanup_task
         except asyncio.CancelledError:
             pass
+
     # Close all remaining processors
     async with processors_lock:
         for pid, proc in list(video_processors.items()):
             try:
-                proc.close()
+                await _close_processor(proc)
             except Exception:
                 pass
             video_processors.pop(pid, None)
@@ -80,14 +75,27 @@ async def _cleanup_inactive_processors_loop():
                     last_active.pop(pid, None)
                     if proc:
                         try:
-                            proc.close()
+                            await _close_processor(proc)
                         except Exception:
                             pass
                         print(f"Evicted processor for participant {pid} due to inactivity.")
-            await asyncio.sleep(10)  # check every 10 seconds
+            await asyncio.sleep(10)
     except asyncio.CancelledError:
-        # task cancelled on shutdown
         return
+
+
+async def _close_processor(proc):
+    """
+    Close MediaPipe/OpenCV resources for a VideoProcessor instance.
+    This is run in a thread because close() may be blocking native code.
+    """
+    if proc is None:
+        return
+    # if the proc exposes 'close', call it in a thread
+    close_fn = getattr(proc, "close", None)
+    if close_fn is None:
+        return
+    await asyncio.to_thread(close_fn)
 
 
 @app.get("/health")
@@ -98,97 +106,163 @@ async def health():
 @app.post("/analyze_frame")
 async def analyze_frame(file: UploadFile = File(...)):
     """
-    Simple HTTP endpoint for single-frame analysis (keeps backward compatibility).
+    HTTP endpoint for single-frame analysis.
+    Lazy-imports VideoProcessor to avoid loading heavy libs on startup.
     """
     contents = await file.read()
-    # Use a transient processor or a shared one (stateless). We'll use a temp VideoProcessor instance here.
-    proc = VideoProcessor()
+    # lazy import & create one-off processor
+    from detection.video_processor import VideoProcessor  # local import (lazy)
+    proc = None
     try:
+        proc = VideoProcessor()
         result = await asyncio.to_thread(proc.process_frame_bytes, contents)
     finally:
-        try:
-            proc.close()
-        except Exception:
-            pass
+        # ensure release of resources
+        if proc:
+            try:
+                await _close_processor(proc)
+            except Exception:
+                pass
     return JSONResponse(result)
 
 
 @app.post("/analyze_audio")
 async def analyze_audio(file: UploadFile = File(...)):
-    if audio_proc is None:
-        raise HTTPException(status_code=503, detail="Audio processor not available")
+    """
+    Lazy-initialize the AudioProcessor only when audio is requested.
+    """
+    global audio_proc
     contents = await file.read()
+
+    if audio_proc is None:
+        # local import to avoid heavy model load at startup
+        from detection.audio_processor import AudioProcessor  # lazy import
+        try:
+            audio_proc = AudioProcessor()  # may load model (heavy)
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Audio processor init error: {e}")
+
     try:
+        # run transcription in thread (CPU-bound/blocking)
         result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
         return JSONResponse({"transcriptions": result})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 def get_db_writer():
     """
     Dependency to provide the DB writer function.
     Replace with actual DB writer in production.
     """
-    return db_writer_stub  # or your actual DB writer function
+    return db_writer_stub
+
 
 @app.websocket("/ws/frames")
-async def websocket_frames(websocket: WebSocket, 
-                           meeting_id: str = Query(...),
-                           participant_id: str = Query(...), 
-                           db_writer = Depends(get_db_writer)):
+async def websocket_frames(
+    websocket: WebSocket,
+    meeting_id: str = Query(...),
+    participant_id: str = Query(...),
+    db_writer=Depends(get_db_writer),
+):
     """
     WebSocket endpoint for per-participant real-time frame analysis.
 
-    Client should connect using:
-      wss://your-service/ws/frames?participant_id=abc123
-
-    Then send binary frames (JPEG/PNG bytes). Server returns JSON results for each frame.
+    Connect as:
+      wss://host/ws/frames?meeting_id=room123&participant_id=user456
     """
     await websocket.accept()
     proc = None
 
     try:
-        # create or fetch participant processor
+        # create or fetch participant processor (lazy)
         async with processors_lock:
             proc = video_processors.get(participant_id)
             if proc is None:
+                # lazy import VideoProcessor only when needed
+                from detection.video_processor import VideoProcessor  # lazy import
                 proc = VideoProcessor()
                 video_processors[participant_id] = proc
             last_active[participant_id] = time.time()
 
         while True:
-            # Receive binary frame bytes. If client sends text, this will raise.
-            frame_bytes = await websocket.receive_bytes()
+            # Receive binary frame bytes (blocks until a message)
+            try:
+                frame_bytes = await websocket.receive_bytes()
+            except Exception as e:
+                # non-bytes or connection error
+                raise
 
             # update last active timestamp
             async with processors_lock:
                 last_active[participant_id] = time.time()
 
-            # Offload heavy processing to thread
+            # Offload CPU-bound processing to thread
             try:
                 result = await asyncio.to_thread(proc.process_frame_bytes, frame_bytes)
-                await save_engagement_metrics(db_writer, meeting_id, participant_id, result)
             except Exception as e:
-                # return error object but keep the connection open
+                # respond with error but keep connection open
                 await websocket.send_json({"error": str(e)})
                 continue
 
-            # Attach participant id (optional) and send back
+            # Persist metrics via provided db_writer (db_writer can be sync or async)
+            try:
+                # Allow db_writer to be async or sync callable
+                if asyncio.iscoroutinefunction(db_writer):
+                    await db_writer({
+                        "meeting_id": meeting_id,
+                        "participant_id": participant_id,
+                        "timestamp": time.time(),
+                        "attention_instant": result.get("attention_instant"),
+                        "fatigue_instant": result.get("fatigue_instant"),
+                        "hand_instant": result.get("hand_instant"),
+                        "events_logged": result.get("events_logged"),
+                    })
+                else:
+                    # run sync writer in thread to avoid blocking
+                    await asyncio.to_thread(db_writer, {
+                        "meeting_id": meeting_id,
+                        "participant_id": participant_id,
+                        "timestamp": time.time(),
+                        "attention_instant": result.get("attention_instant"),
+                        "fatigue_instant": result.get("fatigue_instant"),
+                        "hand_instant": result.get("hand_instant"),
+                        "events_logged": result.get("events_logged"),
+                    })
+            except Exception as e:
+                # log writer error and continue; don't crash the WS
+                try:
+                    await websocket.send_json({"db_error": str(e)})
+                except Exception:
+                    pass
+
+            # Send analysis result back to the client
             result_with_meta = {"participant_id": participant_id, "analysis": result}
             await websocket.send_json(result_with_meta)
 
     except WebSocketDisconnect:
-        # client disconnected; mark last_active to let cleanup evict quickly
+        # client disconnected; free resources promptly
         async with processors_lock:
-            last_active[participant_id] = time.time() - PROCESSOR_IDLE_TIMEOUT - 1
+            proc = video_processors.pop(participant_id, None)
+            last_active.pop(participant_id, None)
+        if proc:
+            try:
+                await _close_processor(proc)
+            except Exception:
+                pass
         print(f"WS disconnected: {participant_id}")
     except Exception as e:
-        # unexpected error
+        # unexpected error: try to close proc and websocket
         print("WS error for participant", participant_id, ":", e)
+        try:
+            async with processors_lock:
+                proc = video_processors.pop(participant_id, None)
+                last_active.pop(participant_id, None)
+            if proc:
+                await _close_processor(proc)
+        except Exception:
+            pass
         try:
             await websocket.close()
         except Exception:
             pass
-        # mark for eviction
-        async with processors_lock:
-            last_active[participant_id] = time.time() - PROCESSOR_IDLE_TIMEOUT - 1
