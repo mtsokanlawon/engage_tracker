@@ -1,0 +1,4 @@
+engtrackvenv/
+assets/
+*.pyc
+__pycache__/
