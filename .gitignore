@@ -1,4 +1,14 @@
-engtrackvenv/
-assets/
-*.pyc
+# Ignore Python virtual environment
+engtrackervenv/
+
+# Ignore Python cache
 __pycache__/
+
+# Ignore compiled Python files
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
