@@ -3,11 +3,14 @@ import asyncio
 import time
 from typing import Dict
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, File, UploadFile, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, File, Depends, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 
 from detection.video_processor import VideoProcessor
 from detection.audio_processor import AudioProcessor
+
+from services.engagement_service import save_engagement_metrics
+from services.db_stub import db_writer_stub # Replace with actual DB writer in production (db_sqlalchemy)
 
 app = FastAPI(title="EngageTrack API (per-participant WS)")
 
@@ -121,9 +124,18 @@ async def analyze_audio(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def get_db_writer():
+    """
+    Dependency to provide the DB writer function.
+    Replace with actual DB writer in production.
+    """
+    return db_writer_stub  # or your actual DB writer function
 
 @app.websocket("/ws/frames")
-async def websocket_frames(websocket: WebSocket, participant_id: str = Query(...)):
+async def websocket_frames(websocket: WebSocket, 
+                           meeting_id: str = Query(...),
+                           participant_id: str = Query(...), 
+                           db_writer = Depends(get_db_writer)):
     """
     WebSocket endpoint for per-participant real-time frame analysis.
 
@@ -155,6 +167,7 @@ async def websocket_frames(websocket: WebSocket, participant_id: str = Query(...
             # Offload heavy processing to thread
             try:
                 result = await asyncio.to_thread(proc.process_frame_bytes, frame_bytes)
+                await save_engagement_metrics(db_writer, meeting_id, participant_id, result)
             except Exception as e:
                 # return error object but keep the connection open
                 await websocket.send_json({"error": str(e)})
