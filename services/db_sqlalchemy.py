@@ -39,7 +39,7 @@ class AudioTranscript(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 
-# NEW Table: Engagement Events
+# Table: Engagement Events
 class EngagementEvent(Base):
     __tablename__ = "engagement_events"
 
@@ -51,7 +51,12 @@ class EngagementEvent(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 
-Base.metadata.create_all(bind=engine)
+# ✅ Create tables at startup
+try:
+    Base.metadata.create_all(bind=engine)
+    print("Database tables created/verified successfully.")
+except Exception as e:
+    print(f"Error creating database tables: {e}")
 
 
 # Save engagement metrics
@@ -69,7 +74,8 @@ def save_engagement_sqlalchemy(meeting_id: str, participant_id: str, metrics: di
         db.commit()
     except Exception as e:
         db.rollback()
-        raise e
+        print(f"Error saving engagement metrics for {participant_id}: {e}")
+        raise
     finally:
         db.close()
 
@@ -84,13 +90,13 @@ def save_engagement_events_sqlalchemy(meeting_id: str, participant_id: str, even
                 ts_str, ev_type, desc = event[:3]
                 try:
                     ts = datetime.strptime(ts_str, "%H:%M:%S")
-                    # Use today's date + parsed time for timestamp
                     now = datetime.utcnow()
                     ts = ts.replace(year=now.year, month=now.month, day=now.day)
                 except Exception:
                     ts = datetime.utcnow()
             else:
-                continue  # skip malformed
+                print(f"Skipping malformed event for {participant_id}: {event}")
+                continue
 
             record = EngagementEvent(
                 meeting_id=meeting_id,
@@ -103,7 +109,8 @@ def save_engagement_events_sqlalchemy(meeting_id: str, participant_id: str, even
         db.commit()
     except Exception as e:
         db.rollback()
-        raise e
+        print(f"Error saving engagement events for {participant_id}: {e}")
+        raise
     finally:
         db.close()
 
@@ -124,6 +131,7 @@ def save_transcript_sqlalchemy(meeting_id: str, participant_id: str, transcript_
         db.commit()
     except Exception as e:
         db.rollback()
-        raise e
+        print(f"Error saving transcript for {participant_id}: {e}")
+        raise
     finally:
         db.close()

@@ -1,52 +1,55 @@
 # db_writer.py
 import asyncio
+from datetime import datetime  # ✅ For timestamp handling
 from services.db_sqlalchemy import save_engagement_sqlalchemy, save_transcript_sqlalchemy
-from datetime import datetime
 
 async def save_engagement(data):
     """
+    Save engagement metrics to the database.
+
     data: dict with keys:
       - meeting_id (str)
       - participant_id (str)
-      - attention_instant (str or float)
-      - fatigue_instant (str or float)
-      - hand_instant (str or float)
-      - events_logged (list)
+      - attention_instant (str/float)
+      - fatigue_instant (str/float)
+      - hand_instant (str/float)
+      - events_logged (list)  # currently unused here, but may be handled elsewhere
     """
-    # Extract metrics you want to save as float values or convert accordingly
-    metrics = {
-        "attention_instant": data.get("attention_instant", "0"),
-        "fatigue_instant": data.get("fatigue_instant", "0"),
-        "hand_instant": data.get("hand_instant", "0"),
-    }
 
-    # Convert non-float values if possible (like strings "Focused" or "Distracted") to floats
-    # Or just store string metric_type with float metric_value when meaningful
-    # Here, we'll store 1.0 for positive states, 0.0 otherwise as example
-
+    # Convert various metric formats into floats
     def convert_metric(value):
         if isinstance(value, (int, float)):
             return float(value)
         if isinstance(value, str):
-            # example mapping
-            if value.lower() in ("focused", "normal", "hand detected", "hand raised"):
+            val = value.lower()
+            if val in ("focused", "normal", "hand detected", "hand raised"):
                 return 1.0
-            elif value.lower() in ("distracted", "potential fatigue", "fatigue detected", "no hand detected"):
+            elif val in ("distracted", "potential fatigue", "fatigue detected", "no hand detected"):
                 return 0.0
         return 0.0
 
-    metrics = {k: convert_metric(v) for k, v in metrics.items()}
+    metrics = {
+        "attention_instant": convert_metric(data.get("attention_instant", 0)),
+        "fatigue_instant": convert_metric(data.get("fatigue_instant", 0)),
+        "hand_instant": convert_metric(data.get("hand_instant", 0)),
+    }
 
-    # Save engagement metrics in thread (blocking SQLAlchemy call)
-    await asyncio.to_thread(
-        save_engagement_sqlalchemy,
-        data["meeting_id"],
-        data["participant_id"],
-        metrics,
-    )
+    try:
+        # Blocking DB call moved to thread pool
+        await asyncio.to_thread(
+            save_engagement_sqlalchemy,
+            data["meeting_id"],
+            data["participant_id"],
+            metrics,
+        )
+    except Exception as e:
+        print(f"Error saving engagement metrics for {data.get('participant_id')}: {e}")
+
 
 async def save_transcript(data):
     """
+    Save audio transcript to the database.
+
     data: dict with keys:
       - meeting_id (str)
       - participant_id (str)
@@ -54,11 +57,14 @@ async def save_transcript(data):
       - start_time (float, optional)
       - end_time (float, optional)
     """
-    await asyncio.to_thread(
-        save_transcript_sqlalchemy,
-        meeting_id=data["meeting_id"],
-        participant_id=data["participant_id"],
-        transcript_text=data.get("transcript_text", ""),
-        start_time=data.get("start_time"),
-        end_time=data.get("end_time"),
-    )
+    try:
+        await asyncio.to_thread(
+            save_transcript_sqlalchemy,
+            meeting_id=data["meeting_id"],
+            participant_id=data["participant_id"],
+            transcript_text=data.get("transcript_text", ""),
+            start_time=data.get("start_time"),
+            end_time=data.get("end_time"),
+        )
+    except Exception as e:
+        print(f"Error saving transcript for {data.get('participant_id')}: {e}")
