@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>EngageTrack Meeting - Host (Debug)</title>
+  <script src="https://8x8.vc/external_api.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+      margin: 0;
+      padding: 0;
+    }
+    #controls {
+      padding: 10px;
+      background: #222;
+      color: #fff;
+      text-align: center;
+    }
+    button {
+      padding: 8px 16px;
+      margin: 5px;
+      background: #007bff;
+      border: none;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    #jaas-container {
+      width: 100%;
+      height: 500px;
+      background: #000;
+    }
+    #participants {
+      background: #fff;
+      padding: 10px;
+      margin: 0;
+      list-style: none;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    #log {
+      background: #111;
+      color: #eee;
+      padding: 10px;
+      font-family: monospace;
+      height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    #status {
+      padding: 8px 10px;
+      font-weight: bold;
+      background: #ddd;
+      color: black;
+      margin: 0 0 10px 0;
+    }
+    .log-info { color: #eee; }
+    .log-warn { color: orange; }
+    .log-error { color: red; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <h1>EngageTrack Meeting - Host (Debug Mode)</h1>
+    <button id="start-meeting-btn">Start Meeting</button>
+    <div id="status">Status: Not started</div>
+  </div>
+
+  <div id="jaas-container"></div>
+
+  <h3>Participants</h3>
+  <ul id="participants"></ul>
+
+  <h3>Logs</h3>
+  <div id="log"></div>
+
+  <script>
+    const APP_ID = "vpaas-magic-cookie-b89487ad3af44f5480c976fcf53f7bdc";
+    const ROOM_NAME = "testingroom"; // Change this as needed
+    const userDisplayName = "Host_" + Math.floor(Math.random() * 1000);
+
+    const participantsMap = {}; // Track participants
+    const logEl = document.getElementById("log");
+    const statusEl = document.getElementById("status");
+
+    // Helper to sanitize display names
+    function safeDisplayName(name, id = null) {
+      if (!name || !name.trim()) {
+        return id ? `User (${id})` : "(no name)";
+      }
+      return name;
+    }
+
+    function log(message, level = "info") {
+      const now = new Date().toLocaleTimeString();
+      const levels = {
+        info: "log-info",
+        warn: "log-warn",
+        error: "log-error",
+      };
+      const className = levels[level] || levels.info;
+
+      const p = document.createElement("div");
+      p.textContent = `[${now}] ${message}`;
+      p.className = className;
+      logEl.appendChild(p);
+      logEl.scrollTop = logEl.scrollHeight;
+
+      if (level === "error") {
+        console.error(message);
+      } else if (level === "warn") {
+        console.warn(message);
+      } else {
+        console.log(message);
+      }
+    }
+
+    function setStatus(text, color = "black") {
+      statusEl.textContent = "Status: " + text;
+      statusEl.style.color = color;
+    }
+
+    async function getJWTToken() {
+      try {
+        const res = await fetch(
+          `http://localhost:5000/get-token?user_name=${encodeURIComponent(
+            userDisplayName
+          )}`
+        );
+        const data = await res.json();
+        log("JWT token fetched successfully");
+        return data.token;
+      } catch (err) {
+        log("Failed to fetch JWT token: " + err.message, "error");
+        return null;
+      }
+    }
+
+    function updateParticipantsList() {
+      const list = document.getElementById("participants");
+      list.innerHTML = "";
+      for (const id in participantsMap) {
+        const li = document.createElement("li");
+        li.textContent = safeDisplayName(participantsMap[id], id);
+        list.appendChild(li);
+      }
+    }
+
+    async function checkAudioElements() {
+      try {
+        const iframes = document.querySelectorAll("iframe");
+        if (iframes.length === 0) {
+          log("No iframes found on the page", "warn");
+          setStatus("No iframes found", "orange");
+          return;
+        }
+        const iframe = iframes[0];
+        const innerDoc =
+          iframe.contentDocument || iframe.contentWindow.document;
+
+        const audioEls = innerDoc.querySelectorAll("audio");
+        log(`Audio elements count: ${audioEls.length}`);
+
+        if (audioEls.length === 0) {
+          setStatus("No audio elements found", "orange");
+          return;
+        } else {
+          setStatus("Audio elements detected", "green");
+          audioEls.forEach((el, i) => {
+            el.muted = true; // Prevent feedback
+            log(`Audio element ${i + 1} muted to avoid feedback`);
+          });
+        }
+      } catch (err) {
+        log("Error accessing audio elements: " + err.message, "error");
+        setStatus("Error accessing audio elements", "red");
+      }
+    }
+
+    let api = null;
+
+    async function startMeeting() {
+      setStatus("Starting meeting...", "black");
+
+      const JWT_TOKEN = await getJWTToken();
+      if (!JWT_TOKEN) {
+        setStatus("Failed to get JWT token", "red");
+        return;
+      }
+
+      const domain = "8x8.vc";
+      const options = {
+        roomName: APP_ID + "/" + ROOM_NAME,
+        width: "100%",
+        height: 500,
+        parentNode: document.querySelector("#jaas-container"),
+        jwt: JWT_TOKEN,
+        configOverwrite: {
+          disableThirdPartyRequests: true,
+          disableLocalVideoFlip: true,
+          startWithAudioMuted: false,
+          startWithVideoMuted: true,
+        },
+        userInfo: { displayName: userDisplayName },
+      };
+
+      api = new JitsiMeetExternalAPI(domain, options);
+
+      api.addEventListener("videoConferenceJoined", (event) => {
+        log(`Host joined conference, id: ${event.id}`);
+        participantsMap[event.id] = userDisplayName;
+        updateParticipantsList();
+        setStatus("Meeting joined", "green");
+
+        // Check audio elements after a short delay
+        setTimeout(checkAudioElements, 3000);
+      });
+
+      api.addEventListener("participantJoined", (event) => {
+        const name = safeDisplayName(event.displayName, event.id);
+        log(`Participant joined: ${name}`);
+        participantsMap[event.id] = name;
+        updateParticipantsList();
+      });
+
+      api.addEventListener("participantLeft", (event) => {
+        log(`Participant left: ${participantsMap[event.id] || event.id}`);
+        delete participantsMap[event.id];
+        updateParticipantsList();
+      });
+
+      api.addEventListener("displayNameChange", (event) => {
+        const oldName = participantsMap[event.id] || "(no name)";
+        const newName = safeDisplayName(event.displayName, event.id);
+        log(`Display name changed: ${oldName} -> ${newName}`);
+        participantsMap[event.id] = newName;
+        updateParticipantsList();
+      });
+
+      api.addEventListener("dominantSpeakerChanged", (event) => {
+        log(`Dominant speaker changed: ${participantsMap[event.id] || event.id}`);
+      });
+
+      api.addEventListener("error", (error) => {
+        log("Jitsi error: " + JSON.stringify(error), "error");
+      });
+    }
+
+    document
+      .getElementById("start-meeting-btn")
+      .addEventListener("click", startMeeting);
+  </script>
+</body>
+</html>

@@ -9,6 +9,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.pk
+*.txt
 
 # Ignore OS-specific files
 .DS_Store
