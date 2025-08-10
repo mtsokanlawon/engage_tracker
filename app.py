@@ -10,7 +10,11 @@ from detection.video_processor import VideoProcessor
 from detection.audio_processor import AudioProcessor
 
 from services.engagement_service import save_engagement_metrics
-from services.db_stub import db_writer_stub # Replace with actual DB writer in production (db_sqlalchemy)
+from services.db_sqlalchemy import (
+    save_engagement_sqlalchemy as db_writer_stub,
+    save_transcript_sqlalchemy
+)
+
 
 app = FastAPI(title="EngageTrack API (per-participant WS)")
 
@@ -114,12 +118,30 @@ async def analyze_frame(file: UploadFile = File(...)):
 
 
 @app.post("/analyze_audio")
-async def analyze_audio(file: UploadFile = File(...)):
+async def analyze_audio(
+    file: UploadFile = File(...), 
+    meeting_id: str = Query(...),
+    participant_id: str = Query(...)
+):
     if audio_proc is None:
         raise HTTPException(status_code=503, detail="Audio processor not available")
     contents = await file.read()
     try:
         result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
+
+        trasncript_text = " ".join(
+            seg["text"] if isinstance(seg, dict) and "text" in seg else str(seg)
+            for seg in result
+        )
+
+        # Save transcript to DB
+        save_transcript_sqlalchemy(
+            meeting_id=meeting_id,
+            participant_id=participant_id,
+            transcript_text=trasncript_text
+        )
+
+        
         return JSONResponse({"transcriptions": result})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -7,3 +7,4 @@ fpdf2
 faster-whisper
 soundfile
 python-multipart
+SQLAlchemy==2.0.42

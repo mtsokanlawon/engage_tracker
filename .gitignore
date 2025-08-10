@@ -1,5 +1,6 @@
 # Ignore Python virtual environment
 engtrackervenv/
+venv/
 
 # Ignore Python cache
 __pycache__/
