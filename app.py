@@ -10,10 +10,7 @@ from detection.video_processor import VideoProcessor
 from detection.audio_processor import AudioProcessor
 
 from services.engagement_service import save_engagement_metrics
-from services.db_sqlalchemy import (
-    save_engagement_sqlalchemy as db_writer_stub,
-    save_transcript_sqlalchemy
-)
+from services.db_writer import save_engagement, save_transcript
 
 
 app = FastAPI(title="EngageTrack API (per-participant WS)")
@@ -129,29 +126,30 @@ async def analyze_audio(
     try:
         result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
 
-        trasncript_text = " ".join(
+        transcript_text = " ".join(
             seg["text"] if isinstance(seg, dict) and "text" in seg else str(seg)
             for seg in result
         )
 
-        # Save transcript to DB
-        save_transcript_sqlalchemy(
-            meeting_id=meeting_id,
-            participant_id=participant_id,
-            transcript_text=trasncript_text
-        )
+        # Save transcript asynchronously using your async writer
+        await save_transcript({
+            "meeting_id": meeting_id,
+            "participant_id": participant_id,
+            "transcript_text": transcript_text
+        })
 
-        
         return JSONResponse({"transcriptions": result})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 def get_db_writer():
     """
     Dependency to provide the DB writer function.
     Replace with actual DB writer in production.
     """
-    return db_writer_stub  # or your actual DB writer function
+    return save_engagement  # Use your real async DB writer
+
 
 @app.websocket("/ws/frames")
 async def websocket_frames(websocket: WebSocket, 
