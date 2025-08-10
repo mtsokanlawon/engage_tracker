@@ -1,0 +1,152 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Jitsi Participant Watcher (JWT)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; display: flex; height: 100vh; }
+    #left { flex: 2; border-right: 1px solid #ddd; display:flex; flex-direction:column; }
+    #jitsi-container { flex: 1; height: 100%; }
+    #controls { padding: 10px; background:#f7f7f7; border-bottom:1px solid #e0e0e0; }
+    #right { width: 320px; padding: 10px; box-sizing: border-box; overflow:auto; }
+    #participants { margin-top:10px; }
+    .participant { padding: 6px; border-bottom: 1px solid #eee; }
+    .host { background:#e8f5e9; }
+  </style>
+  <script src="https://8x8.vc/external_api.js"></script> <!-- JAAS API script -->
+</head>
+<body>
+
+<div id="left">
+  <div id="controls">
+    <label>Room:</label>
+    <input id="roomName" value="EngageTrackRoomDemo123" />
+    <button id="startBtn">Start / Join</button>
+    <button id="leaveBtn" disabled>Leave</button>
+    <span id="status" style="margin-left:12px;color:#666"></span>
+  </div>
+  <div id="jitsi-container"></div>
+</div>
+
+<div id="right">
+  <h3>Participants (excluding host)</h3>
+  <div id="participants">— none —</div>
+  <hr/>
+  <div>
+    <strong>Logs</strong>
+    <pre id="log" style="height:300px; overflow:auto; background:#fafafa; padding:8px;"></pre>
+  </div>
+</div>
+
+<script>
+let api = null;
+let localId = null;
+const participantsMap = {};
+const JWT_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6InZwYWFzLW1hZ2ljLWNvb2tpZS1iODk0ODdhZDNhZjQ0ZjU0ODBjOTc2ZmNmNTNmN2JkYy9iN2UwZDIifQ.eyJhdWQiOiJqaXRzaSIsImlzcyI6ImNoYXQiLCJzdWIiOiJ2cGFhcy1tYWdpYy1jb29raWUtYjg5NDg3YWQzYWY0NGY1NDgwYzk3NmZjZjUzZjdiZGMiLCJyb29tIjoiKiIsIm1vZGVyYXRvciI6ZmFsc2UsImNvbnRleHQiOnsidXNlciI6eyJuYW1lIjoiRW5nYWdlVHJhY2sgQm90IiwiZW1haWwiOiJib3RAZXhhbXBsZS5jb20ifSwiZmVhdHVyZXMiOnsicmVjb3JkaW5nIjp0cnVlLCJsaXZlc3RyZWFtaW5nIjp0cnVlLCJzY3JlZW4tc2hhcmluZyI6dHJ1ZSwib3V0Ym91bmQtY2FsbCI6dHJ1ZSwidHJhbnNjcmlwdGlvbiI6dHJ1ZX19LCJleHAiOjE3NTQ4MzY5NDUsIm5iZiI6MTc1NDgzMzM0NX0.S4IX2hZHjBK7jcPa6zoNbl6WJRBuhcYoILOdX27C25L9ytoeiYMKA0EdK1JyIndkqvQcQrwg8NDG8ryxFqhFH22CkgVVY_na04ZG2NoR2zS9wAoHZRE9s39bTqFW2oMJAF2qTF99fUHIDO62oN7DsPXjKPlqPc7v9VeQXaPW0_vSxdy4Y4m78SG4WOM9ABsnLtHaIpkXKliezYeHL6Tm_X-PaS7C0P_QYDS1giaBLdjRfxLjRJ9b2osGxI-9-bACHXwaoDw2xlR5qF2TMzCuXORsASxrAt2M_XIKFIXxVQb6oIScIju-WuiTG9mxv8SBDlABYtsIksewejnPQ3x7fg"; // From Python script
+
+function log(msg){
+  const p = document.getElementById('log');
+  p.textContent += msg + "\n";
+  p.scrollTop = p.scrollHeight;
+}
+
+function renderParticipants(){
+  const container = document.getElementById('participants');
+  container.innerHTML = '';
+  const list = Object.values(participantsMap);
+  if(list.length === 0){
+    container.innerHTML = '— none —';
+    return;
+  }
+  list.forEach(p=>{
+    const div = document.createElement('div');
+    div.className = 'participant' + (p.id === localId ? ' host' : '');
+    div.innerHTML = `<strong>${p.displayName || '(no name)'}</strong><br/><small>ID: ${p.id}</small>${p.id===localId?' <em>(local/host)</em>':''}`;
+    container.appendChild(div);
+  });
+  const nonHost = list.filter(p => p.id !== localId);
+  log("Non-host participants currently: " + nonHost.map(x => `${x.displayName||x.id} (${x.id})`).join(", ") );
+}
+
+function startJitsi(){
+  if(api) return;
+  const room = document.getElementById('roomName').value || 'EngageTrackRoomDemo123';
+  const domain = '8x8.vc'; // JAAS domain
+  const options = {
+    roomName: "vpaas-magic-cookie-b89487ad3af44f5480c976fcf53f7bdc/" + room,
+    width: '100%',
+    height: '100%',
+    parentNode: document.querySelector('#jitsi-container'),
+    jwt: JWT_TOKEN,
+    configOverwrite: {
+      startWithAudioMuted: false,
+      startWithVideoMuted: false
+    },
+    interfaceConfigOverwrite: {
+      MOBILE_APP_PROMO: false
+    }
+  };
+
+  api = new JitsiMeetExternalAPI(domain, options);
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('leaveBtn').disabled = false;
+  document.getElementById('status').textContent = 'Joined room: ' + room;
+  log('Joining room: ' + room);
+
+  api.addEventListener('videoConferenceJoined', (e) => {
+    localId = e.id;
+    participantsMap[e.id] = { id: e.id, displayName: e.displayName || 'Me' };
+    renderParticipants();
+  });
+
+  api.addEventListener('participantJoined', (event) => {
+    participantsMap[event.id] = { id: event.id, displayName: event.displayName || '(no name yet)' };
+    renderParticipants();
+  });
+
+  api.addEventListener('participantLeft', (event) => {
+    delete participantsMap[event.id];
+    renderParticipants();
+  });
+
+  api.addEventListener('displayNameChange', (event) => {
+    if (!participantsMap[event.id]) participantsMap[event.id] = { id: event.id };
+    participantsMap[event.id].displayName = event.displayname;
+    renderParticipants();
+  });
+
+  setInterval(() => {
+    if(!api) return;
+    try{
+      const infos = api.getParticipantsInfo();
+      infos.forEach(i=>{
+        const pid = i.participantId || i.id;
+        if(!pid) return;
+        participantsMap[pid] = participantsMap[pid] || { id: pid };
+        participantsMap[pid].displayName = i.displayName || participantsMap[pid].displayName;
+      });
+      if(localId && !participantsMap[localId]) participantsMap[localId] = { id: localId, displayName: 'Me' };
+      renderParticipants();
+    }catch(err){}
+  }, 4000);
+}
+
+function leaveJitsi(){
+  if(!api) return;
+  api.executeCommand('hangup');
+  api.dispose();
+  api = null;
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('leaveBtn').disabled = true;
+  document.getElementById('status').textContent = 'Left';
+  for(const k in participantsMap) delete participantsMap[k];
+  localId = null;
+  renderParticipants();
+  log('Left meeting');
+}
+
+document.getElementById('startBtn').addEventListener('click', startJitsi);
+document.getElementById('leaveBtn').addEventListener('click', leaveJitsi);
+</script>
+</body>
+</html>
