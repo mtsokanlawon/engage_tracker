@@ -8,6 +8,8 @@ from detection.audio_processor import AudioProcessor
 from services.db_sqlalchemy import EngagementMetric, AudioTranscript, get_db  # <
 from services.engagement_service import save_engagement_metrics
 
+from typing import Dict
+
 # =========================
 # App Setup
 # =========================
