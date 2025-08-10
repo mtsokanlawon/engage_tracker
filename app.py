@@ -5,7 +5,7 @@ import asyncio, time
 
 from detection.video_processor import VideoProcessor
 from detection.audio_processor import AudioProcessor
-from db_sqlalchemy import EngagementMetric, AudioTranscript, get_db  # <
+from services.db_sqlalchemy import EngagementMetric, AudioTranscript, get_db  # <
 from services.engagement_service import save_engagement_metrics
 
 # =========================

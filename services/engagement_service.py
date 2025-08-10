@@ -1,6 +1,6 @@
 # services/engagement_service.py
 from sqlalchemy.orm import Session
-from db_sqlalchemy import EngagementMetric, AudioTranscript
+from services.db_sqlalchemy import EngagementMetric, AudioTranscript
 from datetime import datetime
 
 def save_engagement_metrics(db: Session, meeting_id: str, participant_id: str, metrics: dict):
