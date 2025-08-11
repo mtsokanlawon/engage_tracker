@@ -120,9 +120,10 @@ async def analyze_audio(file: UploadFile = File(...),
         transcript = AudioTranscript(
             meeting_id=meeting_id,
             participant_id=participant_id,
-            transcript=" ".join(result),
+            transcript=" ".join([r["text"] for r in result]),
             raw_events=result
-        )
+            )
+
         db.add(transcript)
         db.commit()
         return JSONResponse({"transcriptions": result})

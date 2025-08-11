@@ -15,3 +15,5 @@ Thumbs.db
 
 # Ignore local assets
 assets/
+complete.py
+detection/audio_processor1.py
