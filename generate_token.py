@@ -27,8 +27,7 @@ def generate_token(room_name, is_moderator=False, user_name="Guest"):
         }
     }
 
-    token = jwt.encode(payload, private_key, algorithm="RS256")
-    return token
+    return jwt.encode(payload, private_key, algorithm="RS256")
 
 if __name__ == "__main__":
     # Example usage:
