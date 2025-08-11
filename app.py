@@ -1,7 +1,10 @@
 # app.py
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, File, Depends, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import asyncio, time
+
+from fpdf import FPDF
+from sqlalchemy.orm import Session
 
 from detection.video_processor import VideoProcessor
 from detection.audio_processor import AudioProcessor
@@ -180,3 +183,44 @@ async def websocket_frames(websocket: WebSocket,
             pass
         async with processors_lock:
             last_active[participant_id] = time.time() - PROCESSOR_IDLE_TIMEOUT - 1
+
+@app.get("/meetings/{meeting_id}/summary/pdf")
+def get_meeting_summary_pdf(meeting_id: str, db: Session = Depends(get_db)):
+    # Query engagement metrics
+    metrics = db.query(EngagementMetric).filter_by(meeting_id=meeting_id).all()
+    transcripts = db.query(AudioTranscript).filter_by(meeting_id=meeting_id).all()
+
+    # Aggregate engagement data
+    total_events = len(metrics)
+    focused_count = sum(1 for m in metrics if m.attention_instant == "Focused")
+    distracted_count = total_events - focused_count
+    fatigue_count = sum(1 for m in metrics if "Fatigue" in m.fatigue_instant)
+    hand_raises = sum(1 for m in metrics if m.hand_instant == "Hand Raised")
+
+    # Build PDF
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, f"Meeting Summary - {meeting_id}", ln=True)
+
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(0, 8, f"Total frames: {total_events}", ln=True)
+    pdf.cell(0, 8, f"Focused: {focused_count} ({focused_count/total_events:.1%})", ln=True)
+    pdf.cell(0, 8, f"Distracted: {distracted_count} ({distracted_count/total_events:.1%})", ln=True)
+    pdf.cell(0, 8, f"Fatigue events: {fatigue_count}", ln=True)
+    pdf.cell(0, 8, f"Hand raises: {hand_raises}", ln=True)
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "Transcript:", ln=True)
+    pdf.set_font("Arial", "", 11)
+
+    for t in transcripts:
+        pdf.multi_cell(0, 8, f"[{t.participant_id}] {t.transcript}")
+
+    # Save PDF
+    filename = f"/tmp/{meeting_id}_summary.pdf"
+    pdf.output(filename)
+
+    return FileResponse(filename, media_type="application/pdf", filename=f"{meeting_id}_summary.pdf")
+
