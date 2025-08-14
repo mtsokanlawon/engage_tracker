@@ -3,7 +3,7 @@ from faster_whisper import WhisperModel
 from datetime import datetime
 
 class AudioProcessor:
-    def __init__(self, model_name="base", device="cpu"):
+    def __init__(self, model_name="tiny", device="cpu"):
         try:
             self.model = WhisperModel(model_name, device=device, compute_type="int8")
         except Exception as e:
