@@ -133,39 +133,83 @@ async def analyze_frame(file: UploadFile = File(...)):
     return JSONResponse(result)
 
 
-@app.post("/analyze_audio")
+# @app.post("/analyze_audio")
 
+# async def analyze_audio(
+#                         file: UploadFile = File(...),
+#                         meeting_id: str = Query(...),
+#                         participant_id: str = Query(...)
+#                         ):
+#     """
+#     Lazy-initialize the AudioProcessor only when audio is requested.
+#     """
+#     global audio_proc
+#     #=======
+#     # async def analyze_audio(
+#     #     file: UploadFile = File(...), 
+#     #     meeting_id: str = Query(...),
+#     #     participant_id: str = Query(...)
+#     # ):
+#     #     if audio_proc is None:
+#     #         raise HTTPException(status_code=503, detail="Audio processor not available")
+
+#     contents = await file.read()
+
+#     if audio_proc is None:
+#         # local import to avoid heavy model load at startup
+#         from detection.audio_processor import AudioProcessor  # lazy import
+#         try:
+#             audio_proc = AudioProcessor()  # may load model (heavy)
+#         except Exception as e:
+#             raise HTTPException(status_code=503, detail=f"Audio processor init error: {e}")
+
+#     try:
+#         # run transcription in thread (CPU-bound/blocking)
+#         result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
+
+#         trasncript_text = " ".join(
+#             seg["text"] if isinstance(seg, dict) and "text" in seg else str(seg)
+#             for seg in result
+#         )
+
+#         # Save transcript to DB
+#         save_transcript_sqlalchemy(
+#             meeting_id=meeting_id,
+#             participant_id=participant_id,
+#             transcript_text=trasncript_text
+#         )
+
+        
+#         return JSONResponse({"transcriptions": result})
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/analyze_audio")
 async def analyze_audio(
-                        file: UploadFile = File(...),
-                        meeting_id: str = Query(...),
-                        participant_id: str = Query(...)
-                        ):
-    """
-    Lazy-initialize the AudioProcessor only when audio is requested.
-    """
+    file: UploadFile = File(...),
+    meeting_id: str = Query(...),
+    participant_id: str = Query(...)
+):
     global audio_proc
-    #=======
-    # async def analyze_audio(
-    #     file: UploadFile = File(...), 
-    #     meeting_id: str = Query(...),
-    #     participant_id: str = Query(...)
-    # ):
-    #     if audio_proc is None:
-    #         raise HTTPException(status_code=503, detail="Audio processor not available")
-    
+    print("=== analyze_audio request started ===")
+
     contents = await file.read()
+    print(f"Read {len(contents)} bytes from uploaded file")
 
     if audio_proc is None:
-        # local import to avoid heavy model load at startup
-        from detection.audio_processor import AudioProcessor  # lazy import
+        print("Audio processor not loaded, attempting init...")
+        from detection.audio_processor import AudioProcessor
         try:
-            audio_proc = AudioProcessor()  # may load model (heavy)
+            audio_proc = AudioProcessor()
+            print("Audio processor loaded successfully")
         except Exception as e:
+            print("Audio processor failed to load:", e)
             raise HTTPException(status_code=503, detail=f"Audio processor init error: {e}")
 
+    print("Running transcription...")
     try:
-        # run transcription in thread (CPU-bound/blocking)
         result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
+        print("Transcription finished")
 
         trasncript_text = " ".join(
             seg["text"] if isinstance(seg, dict) and "text" in seg else str(seg)
@@ -181,8 +225,11 @@ async def analyze_audio(
 
         
         return JSONResponse({"transcriptions": result})
+
     except Exception as e:
+        print("Transcription error:", e)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 def get_db_writer():
