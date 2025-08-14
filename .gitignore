@@ -1,5 +1,6 @@
 # Ignore Python virtual environment
 engtrackervenv/
+venv/
 
 # Ignore Python cache
 __pycache__/
@@ -15,3 +16,7 @@ Thumbs.db
 
 # Ignore local assets
 assets/
+engtrackervenv/
+
+audio_processor1.py
+complete.py
