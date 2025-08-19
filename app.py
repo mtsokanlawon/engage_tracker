@@ -22,7 +22,8 @@ app = FastAPI(title="EngageTrack API (per-participant WS)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["file://*","*"],  # allowing all for testing
+    allow_origins=["http://localhost:5500","file://","*"],  # allowing all for testing
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
