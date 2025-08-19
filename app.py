@@ -251,6 +251,8 @@ async def receive_frame(
 
     return {"status": "received", "analysis": result}
 
+app.include_router(router)
+
 # @app.get("/meetings/{meeting_id}/summary/pdf")
 # def get_meeting_summary_pdf(meeting_id: str, db: Session = Depends(get_db)):
 #     # Query engagement metrics
