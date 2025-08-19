@@ -1,5 +1,5 @@
 # app.py
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, File, Depends, UploadFile, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, File, Depends, UploadFile, HTTPException, APIRouter
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -26,6 +26,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+router = APIRouter()
 
 video_processors: Dict[str, VideoProcessor] = {}
 last_active: Dict[str, float] = {}
@@ -142,56 +144,112 @@ async def analyze_audio(file: UploadFile = File(...),
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.websocket("/ws/frames")
-async def websocket_frames(websocket: WebSocket, 
-                           meeting_id: str = Query(...),
-                           participant_id: str = Query(...),
-                           db=Depends(get_db)):
-    await websocket.accept()
-    proc = None
+# @app.websocket("/ws/frames")
+# async def websocket_frames(websocket: WebSocket, 
+#                            meeting_id: str = Query(...),
+#                            participant_id: str = Query(...),
+#                            db=Depends(get_db)):
+#     await websocket.accept()
+#     proc = None
+#     try:
+#         async with processors_lock:
+#             proc = video_processors.get(participant_id)
+#             if proc is None:
+#                 proc = VideoProcessor()
+#                 video_processors[participant_id] = proc
+#             last_active[participant_id] = time.time()
+
+#         while True:
+#             frame_bytes = await websocket.receive_bytes()
+#             async with processors_lock:
+#                 last_active[participant_id] = time.time()
+#             try:
+#                 result = await asyncio.to_thread(proc.process_frame_bytes, frame_bytes)
+#                 metric = EngagementMetric(
+#                     meeting_id=meeting_id,
+#                     participant_id=participant_id,
+#                     attention_instant=result["attention_instant"],
+#                     fatigue_instant=result["fatigue_instant"],
+#                     hand_instant=result["hand_instant"],
+#                     events_logged=result["events_logged"]
+#                 )
+#                 db.add(metric)
+#                 db.commit()
+#             except Exception as e:
+#                 await websocket.send_json({"error": str(e)})
+#                 continue
+
+#             result_with_meta = {"participant_id": participant_id, "analysis": result}
+#             await websocket.send_json(result_with_meta)
+
+#     except WebSocketDisconnect:
+#         async with processors_lock:
+#             last_active[participant_id] = time.time() - PROCESSOR_IDLE_TIMEOUT - 1
+#         print(f"WS disconnected: {participant_id}")
+#     except Exception as e:
+#         print("WS error for participant", participant_id, ":", e)
+#         try:
+#             await websocket.close()
+#         except Exception:
+#             pass
+#         async with processors_lock:
+#             last_active[participant_id] = time.time() - PROCESSOR_IDLE_TIMEOUT - 1
+
+@router.post("/webhook/frames")
+async def receive_frame(
+    payload: dict,
+    meeting_id: str = Query(...),
+    participant_id: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Expects JSON body like:
+    { "frame": "data:image/jpeg;base64,......" }
+    """
+
+    # Validate incoming payload
+    if "frame" not in payload:
+        raise HTTPException(status_code=400, detail="Missing 'frame' in body")
+
+    dataurl = payload["frame"]
     try:
-        async with processors_lock:
-            proc = video_processors.get(participant_id)
-            if proc is None:
-                proc = VideoProcessor()
-                video_processors[participant_id] = proc
-            last_active[participant_id] = time.time()
-
-        while True:
-            frame_bytes = await websocket.receive_bytes()
-            async with processors_lock:
-                last_active[participant_id] = time.time()
-            try:
-                result = await asyncio.to_thread(proc.process_frame_bytes, frame_bytes)
-                metric = EngagementMetric(
-                    meeting_id=meeting_id,
-                    participant_id=participant_id,
-                    attention_instant=result["attention_instant"],
-                    fatigue_instant=result["fatigue_instant"],
-                    hand_instant=result["hand_instant"],
-                    events_logged=result["events_logged"]
-                )
-                db.add(metric)
-                db.commit()
-            except Exception as e:
-                await websocket.send_json({"error": str(e)})
-                continue
-
-            result_with_meta = {"participant_id": participant_id, "analysis": result}
-            await websocket.send_json(result_with_meta)
-
-    except WebSocketDisconnect:
-        async with processors_lock:
-            last_active[participant_id] = time.time() - PROCESSOR_IDLE_TIMEOUT - 1
-        print(f"WS disconnected: {participant_id}")
+        # Remove the prefix 'data:image/jpeg;base64,'
+        base64_string = dataurl.split(",", 1)[1]
+        frame_bytes = base64.b64decode(base64_string)
     except Exception as e:
-        print("WS error for participant", participant_id, ":", e)
+        raise HTTPException(status_code=400, detail="Invalid base64 string")
+
+    # Obtain or create processor
+    try:
+        proc = video_processors.get(participant_id)
+        if proc is None:
+            proc = VideoProcessor()
+            video_processors[participant_id] = proc
+
+        # Process frame
+        result = await asyncio.to_thread(proc.process_frame_bytes, frame_bytes)
+
+        # Save metric
+        metric = EngagementMetric(
+            meeting_id=meeting_id,
+            participant_id=participant_id,
+            attention_instant=result["attention_instant"],
+            fatigue_instant=result["fatigue_instant"],
+            hand_instant=result["hand_instant"],
+            events_logged=result["events_logged"]
+        )
+        db.add(metric)
+        db.commit()
+
+    except Exception as e:
+        # Rollback to keep DB clean if commit fails
         try:
-            await websocket.close()
+            db.rollback()
         except Exception:
             pass
-        async with processors_lock:
-            last_active[participant_id] = time.time() - PROCESSOR_IDLE_TIMEOUT - 1
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+
+    return {"status": "received", "analysis": result}
 
 # @app.get("/meetings/{meeting_id}/summary/pdf")
 # def get_meeting_summary_pdf(meeting_id: str, db: Session = Depends(get_db)):
