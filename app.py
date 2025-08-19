@@ -1,6 +1,8 @@
 # app.py
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, File, Depends, UploadFile, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+
 import asyncio, time
 
 from fpdf import FPDF
@@ -17,6 +19,13 @@ from typing import Dict
 # App Setup
 # =========================
 app = FastAPI(title="EngageTrack API (per-participant WS)")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # allowing all for testing
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 video_processors: Dict[str, VideoProcessor] = {}
 last_active: Dict[str, float] = {}
