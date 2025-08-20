@@ -196,12 +196,13 @@ async def webhook_frames(
         
         rows = db.query(EngagementMetric).all()
         print(f"Total EngagementMetric rows in DB: {len(rows)}")
-        
-    finally:
-        return {"status": "received", "analysis": result}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
+        
+    finally:
+        return {"status": "received", "analysis": result}
+    
 
 @app.get("/meetings/{meeting_id}/summary/pdf")
 def get_meeting_summary_pdf(meeting_id: str, db: Session = Depends(get_db)):
