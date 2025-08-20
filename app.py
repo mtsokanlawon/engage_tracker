@@ -150,10 +150,11 @@ async def analyze_audio(
         db.commit()
         db.refresh(metric)  # ensure it's written
         print(f"✅ Saved metric: {metric.id}, meeting_id={metric.meeting_id}")
-    finally:
-        return {"transcriptions": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+        
+    finally:
+        return {"transcriptions": result}
 
 @app.post("/webhook/frames")
 async def webhook_frames(
