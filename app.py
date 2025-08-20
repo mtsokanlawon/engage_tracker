@@ -102,14 +102,17 @@ async def health():
     return {"status": "running"}
 
 @app.post("/analyze_frame")
-async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def analyze_frame(file: UploadFile = File(...), 
+                        meeting_id: str = Query(...),
+                        participant_id: str = Query(...),
+                        db: Session = Depends(get_db)):
     contents = await file.read()
     proc = VideoProcessor()
     try:
         result = await asyncio.to_thread(proc.process_frame_bytes, contents)
         metric = EngagementMetric(
-            meeting_id="single_frame_test",
-            participant_id="single_participant",
+            meeting_id=meeting_id,
+            participant_id=participant_id,
             attention_instant=result["attention_instant"],
             fatigue_instant=result["fatigue_instant"],
             hand_instant=result["hand_instant"],
@@ -117,6 +120,8 @@ async def analyze_frame(file: UploadFile = File(...), db: Session = Depends(get_
         )
         db.add(metric)
         db.commit()
+        db.refresh(metric)  # ensure it's written
+        print(f"✅ Saved metric: {metric.id}, meeting_id={metric.meeting_id}")
     finally:
         try:
             proc.close()
@@ -143,6 +148,9 @@ async def analyze_audio(
         )
         db.add(transcript)
         db.commit()
+        db.refresh(metric)  # ensure it's written
+        print(f"✅ Saved metric: {metric.id}, meeting_id={metric.meeting_id}")
+    finally:
         return {"transcriptions": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -183,6 +191,13 @@ async def webhook_frames(
         )
         db.add(metric)
         db.commit()
+        db.refresh(metric)  # ensure it's written
+        print(f"✅ Saved metric: {metric.id}, meeting_id={metric.meeting_id}")
+        
+        rows = db.query(EngagementMetric).all()
+        print(f"Total EngagementMetric rows in DB: {len(rows)}")
+        
+    finally:
         return {"status": "received", "analysis": result}
     except Exception as e:
         db.rollback()
