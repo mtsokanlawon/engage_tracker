@@ -247,4 +247,29 @@ def get_meeting_summary_pdf(meeting_id: str, db: Session = Depends(get_db)):
 
     return FileResponse(filename, media_type="application/pdf", filename=f"{meeting_id}_summary.pdf")
 
+@app.get("/debug/metrics/{meeting_id}")
+def get_meeting_metrics(meeting_id: str, db: Session = Depends(get_db)):
+    metrics = db.query(EngagementMetric).filter_by(meeting_id=meeting_id).all()
+
+    if not metrics:
+        return {"meeting_id": meeting_id, "frames": 0, "metrics": []}
+
+    results = []
+    for m in metrics:
+        results.append({
+            "id": str(m.id),
+            "participant_id": m.participant_id,
+            "attention_instant": m.attention_instant,
+            "fatigue_instant": m.fatigue_instant,
+            "hand_instant": m.hand_instant,
+            "events_logged": m.events_logged,
+            "created_at": m.created_at.isoformat() if hasattr(m, "created_at") else None
+        })
+
+    return {
+        "meeting_id": meeting_id,
+        "frames": len(results),
+        "metrics": results
+    }
+
 
