@@ -10,7 +10,7 @@ aiofiles==23.1.0
 
 pydub==0.25.1
 ffmpeg-python==0.2.0
-librosa==0.10.3.post2
+librosa==0.10.2.post1
 soundfile==0.13.1
 sounddevice==0.5.2
 faster-whisper==1.2.0
@@ -30,3 +30,4 @@ python-dotenv==1.0.1
 requests==2.31.0
 tqdm==4.67.1
 fpdf2==2.7.3
+ffmpeg
