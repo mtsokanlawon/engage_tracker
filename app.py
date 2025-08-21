@@ -3,7 +3,8 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-import asyncio, time, base64
+from pydub import AudioSegment
+import asyncio, time, base64, io
 
 from detection.video_processor import VideoProcessor
 from detection.audio_processor import AudioProcessor
@@ -137,9 +138,19 @@ async def analyze_audio(
     db: Session = Depends(get_db)):
     if audio_proc is None:
         raise HTTPException(status_code=503, detail="Audio processor not available")
+    # contents = await file.read()
     contents = await file.read()
+
     try:
-        result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
+        # Convert WebM/Opus → WAV in-memory
+        audio = AudioSegment.from_file(io.BytesIO(contents), format="webm")
+        wav_io = io.BytesIO()
+        audio.export(wav_io, format="wav")
+        wav_bytes = wav_io.getvalue()
+        
+        result = await asyncio.to_thread(audio_proc.transcribe_bytes, wav_bytes)
+    # try:
+        # result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
         transcript = AudioTranscript(
             meeting_id=meeting_id,
             participant_id=participant_id,
