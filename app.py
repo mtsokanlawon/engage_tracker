@@ -192,6 +192,7 @@ async def webhook_frames(
         video_processors[participant_id] = proc
 
     # Process & store engagement metric
+    result = None
     try:
         result = await asyncio.to_thread(proc.process_frame_bytes, frame_bytes)
         metric = EngagementMetric(
@@ -211,10 +212,10 @@ async def webhook_frames(
         print(f"Total EngagementMetric rows in DB: {len(rows)}")
     except Exception as e:
         db.rollback()
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
         
-    finally:
-        return {"status": "received", "analysis": result}
+    return {"status": "received", "analysis": result}
     
 
 @app.get("/meetings/{meeting_id}/summary/pdf")
