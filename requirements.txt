@@ -9,7 +9,7 @@ python-multipart==0.0.6
 aiofiles==23.1.0
 
 pydub==0.25.1
-ffmpeg-python==0.3.0
+ffmpeg-python==0.2.0
 librosa==0.10.3.post2
 soundfile==0.13.1
 sounddevice==0.5.2
