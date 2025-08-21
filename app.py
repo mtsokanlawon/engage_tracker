@@ -131,42 +131,85 @@ async def analyze_frame(file: UploadFile = File(...),
             pass
     return JSONResponse(result)
 
+audio_lock = asyncio.Lock()
+
 @app.post("/analyze_audio")
 async def analyze_audio(
     file: UploadFile = File(...),
     meeting_id: str = Query(...),
     participant_id: str = Query(...),
-    db: Session = Depends(get_db)):
+    db: Session = Depends(get_db)
+):
     if audio_proc is None:
         raise HTTPException(status_code=503, detail="Audio processor not available")
-    # contents = await file.read()
+
     contents = await file.read()
-    result = None
+
     try:
-        # Convert WebM/Opus → WAV in-memory
+        # Convert WebM/MP3/etc → WAV in-memory, auto-detect format
         audio = AudioSegment.from_file(io.BytesIO(contents))
         wav_io = io.BytesIO()
         audio.export(wav_io, format="wav")
         wav_bytes = wav_io.getvalue()
-        
-        result = await asyncio.to_thread(audio_proc.transcribe_bytes, wav_bytes)
-    # try:
-        # result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
+
+        # Acquire lock to prevent overlapping faster-whisper calls
+        async with audio_lock:
+            result = await asyncio.to_thread(audio_proc.transcribe_bytes, wav_bytes)
+
+        # Save transcript
+        transcript_text = " ".join([r["text"] for r in result])
         transcript = AudioTranscript(
             meeting_id=meeting_id,
             participant_id=participant_id,
-            transcript=" ".join([r["text"] for r in result]),
+            transcript=transcript_text,
             raw_events=result
         )
         db.add(transcript)
         db.commit()
-        db.refresh(transcript)  # ensure it's written
-        print(f"✅ Saved metric: {transcript.id}, meeting_id={transcript.meeting_id}")
+        db.refresh(transcript)
+
+        return {"transcriptions": result}
+
     except Exception as e:
-        traceback.print_exc()  # logs full stack trace
+        import traceback
+        traceback.print_exc()  # Logs full error for debugging
         raise HTTPException(status_code=500, detail=str(e))
+# @app.post("/analyze_audio")
+# async def analyze_audio(
+#     file: UploadFile = File(...),
+#     meeting_id: str = Query(...),
+#     participant_id: str = Query(...),
+#     db: Session = Depends(get_db)):
+#     if audio_proc is None:
+#         raise HTTPException(status_code=503, detail="Audio processor not available")
+#     # contents = await file.read()
+#     contents = await file.read()
+#     result = None
+#     try:
+#         # Convert WebM/Opus → WAV in-memory
+#         audio = AudioSegment.from_file(io.BytesIO(contents))
+#         wav_io = io.BytesIO()
+#         audio.export(wav_io, format="wav")
+#         wav_bytes = wav_io.getvalue()
         
-    return {"transcriptions": result}
+#         result = await asyncio.to_thread(audio_proc.transcribe_bytes, wav_bytes)
+#     # try:
+#         # result = await asyncio.to_thread(audio_proc.transcribe_bytes, contents)
+#         transcript = AudioTranscript(
+#             meeting_id=meeting_id,
+#             participant_id=participant_id,
+#             transcript=" ".join([r["text"] for r in result]),
+#             raw_events=result
+#         )
+#         db.add(transcript)
+#         db.commit()
+#         db.refresh(transcript)  # ensure it's written
+#         print(f"✅ Saved metric: {transcript.id}, meeting_id={transcript.meeting_id}")
+#     except Exception as e:
+#         traceback.print_exc()  # logs full stack trace
+#         raise HTTPException(status_code=500, detail=str(e))
+        
+#     return {"transcriptions": result}
 
 @app.post("/webhook/frames")
 async def webhook_frames(
