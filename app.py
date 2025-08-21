@@ -144,7 +144,7 @@ async def analyze_audio(
     result = None
     try:
         # Convert WebM/Opus → WAV in-memory
-        audio = AudioSegment.from_file(io.BytesIO(contents), format="webm")
+        audio = AudioSegment.from_file(io.BytesIO(contents))
         wav_io = io.BytesIO()
         audio.export(wav_io, format="wav")
         wav_bytes = wav_io.getvalue()
