@@ -140,7 +140,7 @@ async def analyze_audio(
         raise HTTPException(status_code=503, detail="Audio processor not available")
     # contents = await file.read()
     contents = await file.read()
-
+    result = None
     try:
         # Convert WebM/Opus → WAV in-memory
         audio = AudioSegment.from_file(io.BytesIO(contents), format="webm")
@@ -159,13 +159,12 @@ async def analyze_audio(
         )
         db.add(transcript)
         db.commit()
-        db.refresh(metric)  # ensure it's written
-        print(f"✅ Saved metric: {metric.id}, meeting_id={metric.meeting_id}")
+        db.refresh(transcript)  # ensure it's written
+        print(f"✅ Saved metric: {transcript.id}, meeting_id={transcript.meeting_id}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
         
-    finally:
-        return {"transcriptions": result}
+    return {"transcriptions": result}
 
 @app.post("/webhook/frames")
 async def webhook_frames(
