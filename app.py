@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from pydub import AudioSegment
 import asyncio, time, base64, io
+import traceback
 
 from detection.video_processor import VideoProcessor
 from detection.audio_processor import AudioProcessor
@@ -162,6 +163,7 @@ async def analyze_audio(
         db.refresh(transcript)  # ensure it's written
         print(f"✅ Saved metric: {transcript.id}, meeting_id={transcript.meeting_id}")
     except Exception as e:
+        traceback.print_exc()  # logs full stack trace
         raise HTTPException(status_code=500, detail=str(e))
         
     return {"transcriptions": result}
