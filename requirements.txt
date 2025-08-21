@@ -4,6 +4,7 @@ websockets==15.0.1
 starlette==0.47.2
 pydantic==2.11.7
 pydantic_core==2.33.2
+pydub
 typing_extensions==4.12.2
 python-multipart
 fpdf2
