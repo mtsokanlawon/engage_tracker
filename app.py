@@ -146,8 +146,18 @@ async def analyze_audio(
     contents = await file.read()
 
     try:
-        # Convert WebM/MP3/etc → WAV in-memory, auto-detect format
-        audio = AudioSegment.from_file(io.BytesIO(contents))
+        ## Detect format from UploadFile content type
+        mime_type = file.content_type or ""
+        if "webm" in mime_type:
+            fmt = "webm"
+        elif "wav" in mime_type:
+            fmt = "wav"
+        elif "ogg" in mime_type:
+            fmt = "ogg"
+        else:
+            fmt = None  # let ffmpeg try
+            
+        audio = AudioSegment.from_file(io.BytesIO(contents), format=fmt)
         wav_io = io.BytesIO()
         audio.export(wav_io, format="wav")
         wav_bytes = wav_io.getvalue()
