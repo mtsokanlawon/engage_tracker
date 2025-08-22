@@ -4,15 +4,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from pydub import AudioSegment
-import asyncio, time, base64, io
-import traceback
+import asyncio, time, base64, io, os
+import traceback, tempfile, subprocess
 
 from detection.video_processor import VideoProcessor
 from detection.audio_processor import AudioProcessor
 from services.db_sqlalchemy import EngagementMetric, AudioTranscript, get_db
+from sqlalchemy.orm import Session
 from fpdf import FPDF
 
-from typing import Dict
+from typing import Dict, Optional
 
 # =========================
 # App Setup
@@ -23,7 +24,7 @@ app = FastAPI(title="EngageTrack API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # you can restrict later
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
@@ -131,8 +132,80 @@ async def analyze_frame(file: UploadFile = File(...),
             pass
     return JSONResponse(result)
 
+# ===== Concurrency & limits =====
 audio_lock = asyncio.Lock()
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024   # 8 MB safety cap per chunk
+WHISPER_TIMEOUT_S = 40               # guard long inference on small instances
 
+# ----- helpers -----
+SUPPORTED_TYPES = {
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+}
+
+def _guess_format(content_type: Optional[str]) -> Optional[str]:
+    if not content_type:
+        return None
+    ct = content_type.split(";")[0].strip().lower()
+    return SUPPORTED_TYPES.get(ct)
+
+def _ffmpeg_convert_to_wav16k(in_path: str, out_path: str) -> None:
+    """
+    Convert arbitrary audio (webm/ogg/mp3/wav/…) to 16kHz mono signed 16-bit WAV.
+    Uses very little RAM vs decoding in Python.
+    """
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-y",
+        "-i", in_path,
+        "-ac", "1",           # mono
+        "-ar", "16000",       # 16 kHz
+        "-f", "wav",
+        "-acodec", "pcm_s16le",
+        out_path
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(
+            status_code=415,
+            detail=f"FFmpeg failed to decode input (unsupported/invalid audio)."
+        ) from e
+
+async def _stream_upload_to_temp(file: UploadFile, max_bytes: int) -> str:
+    """
+    Streams the UploadFile to a NamedTemporaryFile on disk with a size cap.
+    Returns the temp file path.
+    """
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".bin")
+    tmp_path = tmp.name
+    written = 0
+    try:
+        chunk_size = 1024 * 1024  # 1MB chunks
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                raise HTTPException(status_code=413, detail="Audio chunk too large")
+            tmp.write(chunk)
+        tmp.flush()
+        tmp.close()
+        return tmp_path
+    except Exception:
+        tmp.close()
+        try: os.remove(tmp_path)
+        except: pass
+        raise
+
+# ===== endpoint =====
 @app.post("/analyze_audio")
 async def analyze_audio(
     file: UploadFile = File(...),
@@ -140,34 +213,53 @@ async def analyze_audio(
     participant_id: str = Query(...),
     db: Session = Depends(get_db)
 ):
+    # 1) ensure model available
     if audio_proc is None:
         raise HTTPException(status_code=503, detail="Audio processor not available")
 
-    contents = await file.read()
+    # 2) validate content type → pick demux/codec hints for ffmpeg
+    fmt = _guess_format(file.content_type)
+    # We actually let ffmpeg probe; fmt is only used for error messages
+    # Keeping this check mainly to reject obviously wrong inputs early:
+    if file.content_type and not fmt:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported Content-Type: {file.content_type}. "
+                   f"Send audio/webm;codecs=opus, audio/ogg, audio/wav, or audio/mpeg."
+        )
 
+    # 3) stream upload to disk (no huge RAM buffers)
+    src_path = await _stream_upload_to_temp(file, MAX_UPLOAD_BYTES)
+
+    # 4) convert to 16k mono WAV on disk
+    dst_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
     try:
-        ## Detect format from UploadFile content type
-        mime_type = file.content_type or ""
-        if "webm" in mime_type:
-            fmt = "webm"
-        elif "wav" in mime_type:
-            fmt = "wav"
-        elif "ogg" in mime_type:
-            fmt = "ogg"
-        else:
-            fmt = None  # let ffmpeg try
-            
-        audio = AudioSegment.from_file(io.BytesIO(contents), format=fmt)
-        wav_io = io.BytesIO()
-        audio.export(wav_io, format="wav")
-        wav_bytes = wav_io.getvalue()
+        _ffmpeg_convert_to_wav16k(src_path, dst_path)
 
-        # Acquire lock to prevent overlapping faster-whisper calls
+        # 5) read WAV bytes (moderate size after downsample/mono)
+        with open(dst_path, "rb") as f:
+            wav_bytes = f.read()
+
+        # 6) run whisper behind a lock, with a timeout (prevents pileups)
         async with audio_lock:
-            result = await asyncio.to_thread(audio_proc.transcribe_bytes, wav_bytes)
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(audio_proc.transcribe_bytes, wav_bytes),
+                    timeout=WHISPER_TIMEOUT_S
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=503, detail="Transcription timed out")
 
-        # Save transcript
-        transcript_text = " ".join([r["text"] for r in result])
+        # 7) build transcript text safely
+        parts = []
+        for r in result or []:
+            if isinstance(r, dict):
+                parts.append(r.get("text", "").strip())
+            else:
+                parts.append(getattr(r, "text", "").strip())
+        transcript_text = " ".join([p for p in parts if p])
+
+        # 8) persist
         transcript = AudioTranscript(
             meeting_id=meeting_id,
             participant_id=participant_id,
@@ -178,12 +270,73 @@ async def analyze_audio(
         db.commit()
         db.refresh(transcript)
 
-        return {"transcriptions": result}
+        return {"ok": True, "transcriptions": result, "text": transcript_text}
 
+    except HTTPException:
+        # pass through known HTTP exceptions
+        raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()  # Logs full error for debugging
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # 9) cleanup temp files
+        for p in (src_path, dst_path):
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except:
+                pass
+# @app.post("/analyze_audio")
+# async def analyze_audio(
+#     file: UploadFile = File(...),
+#     meeting_id: str = Query(...),
+#     participant_id: str = Query(...),
+#     db: Session = Depends(get_db)
+# ):
+#     if audio_proc is None:
+#         raise HTTPException(status_code=503, detail="Audio processor not available")
+
+#     contents = await file.read()
+
+#     try:
+#         ## Detect format from UploadFile content type
+#         mime_type = file.content_type or ""
+#         if "webm" in mime_type:
+#             fmt = "webm"
+#         elif "wav" in mime_type:
+#             fmt = "wav"
+#         elif "ogg" in mime_type:
+#             fmt = "ogg"
+#         else:
+#             fmt = None  # let ffmpeg try
+            
+#         audio = AudioSegment.from_file(io.BytesIO(contents), format=fmt)
+#         wav_io = io.BytesIO()
+#         audio.export(wav_io, format="wav")
+#         wav_bytes = wav_io.getvalue()
+
+#         # Acquire lock to prevent overlapping faster-whisper calls
+#         async with audio_lock:
+#             result = await asyncio.to_thread(audio_proc.transcribe_bytes, wav_bytes)
+
+#         # Save transcript
+#         transcript_text = " ".join([r["text"] for r in result])
+#         transcript = AudioTranscript(
+#             meeting_id=meeting_id,
+#             participant_id=participant_id,
+#             transcript=transcript_text,
+#             raw_events=result
+#         )
+#         db.add(transcript)
+#         db.commit()
+#         db.refresh(transcript)
+
+#         return {"transcriptions": result}
+
+#     except Exception as e:
+#         import traceback
+#         traceback.print_exc()  # Logs full error for debugging
+#         raise HTTPException(status_code=500, detail=str(e))
 # @app.post("/analyze_audio")
 # async def analyze_audio(
 #     file: UploadFile = File(...),
