@@ -21,9 +21,14 @@ from typing import Dict, Optional
 app = FastAPI(title="EngageTrack API")
 
 # Enable CORS globally
+origins = [
+    "http://localhost:3000",   # local React/Next.js dev server
+    "https://engage-track.onrender.com",  # optional: allow same-domain calls
+    "*",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # you can restrict later
+    allow_origins=origins,  # you can restrict later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
