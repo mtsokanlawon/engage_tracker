@@ -236,7 +236,7 @@ async def analyze_audio(
             raise HTTPException(status_code=415, detail=f"Unsupported media type: {mime_type}")
 
         # Convert to WAV
-        audio = AudioSegment.from_file(io.BytesIO(contents), format=fmt)
+        audio = AudioSegment.from_file(io.BytesIO(contents), format='webm')
         wav_io = io.BytesIO()
         audio.export(wav_io, format="wav")
         wav_bytes = wav_io.getvalue()
